@@ -962,7 +962,6 @@ export default function App() {
                         <TimeInput
                           value={row.inTime}
                           format={timeFormat}
-                          disabled={row.dayType === 'Non-working Day'}
                           onChange={(val) => updateRow(index, { inTime: val })}
                         />
                       </td>
@@ -972,7 +971,6 @@ export default function App() {
                         <TimeInput
                           value={row.outTime}
                           format={timeFormat}
-                          disabled={row.dayType === 'Non-working Day'}
                           onChange={(val) => updateRow(index, { outTime: val })}
                         />
                       </td>
@@ -1051,7 +1049,6 @@ export default function App() {
                     <TimeInput
                       value={row.inTime}
                       format={timeFormat}
-                      disabled={row.dayType === 'Non-working Day'}
                       onChange={(val) => updateRow(index, { inTime: val })}
                     />
                   </div>
@@ -1062,7 +1059,6 @@ export default function App() {
                     <TimeInput
                       value={row.outTime}
                       format={timeFormat}
-                      disabled={row.dayType === 'Non-working Day'}
                       onChange={(val) => updateRow(index, { outTime: val })}
                     />
                   </div>
