@@ -1,5 +1,6 @@
 services:
-  - type: static
+  - type: web
     name: ot-calculator-pro
+    runtime: static
     buildCommand: npm run build
     staticPublishPath: ./dist
