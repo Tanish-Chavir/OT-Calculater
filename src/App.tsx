@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 // @ts-ignore
-import XLSX from 'xlsx-js-style';
+import * as XLSX from 'xlsx';
 
 type DayType = 'Working Day' | 'Saturday' | 'Non-working Day' | 'Holiday';
 
@@ -199,18 +199,45 @@ function TimeInput({
 }
 
 export default function App() {
-  const [selectedMonth, setSelectedMonth] = useState<number>(4); // Default: April
-  const [selectedYear, setSelectedYear] = useState<number>(2026); // Default: 2026
-  const [salary, setSalary] = useState<number>(27000); // Default: 27000
+  const [profiles, setProfiles] = useState<string[]>(() => {
+    const saved = localStorage.getItem('ot_calc_profiles');
+    return saved ? JSON.parse(saved) : ['Default Profile'];
+  });
+  const [activeProfile, setActiveProfile] = useState<string>(() => {
+    const saved = localStorage.getItem('ot_calc_active_profile');
+    return saved || 'Default Profile';
+  });
+
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => {
+    const savedMonth = localStorage.getItem(`ot_calc_last_month_${activeProfile}`);
+    if (savedMonth) return Number(savedMonth);
+    const oldSavedMonth = localStorage.getItem('ot_calc_last_month');
+    return oldSavedMonth ? Number(oldSavedMonth) : 4;
+  });
+  const [selectedYear, setSelectedYear] = useState<number>(() => {
+    const savedYear = localStorage.getItem(`ot_calc_last_year_${activeProfile}`);
+    if (savedYear) return Number(savedYear);
+    const oldSavedYear = localStorage.getItem('ot_calc_last_year');
+    return oldSavedYear ? Number(oldSavedYear) : 2026;
+  });
+  const [salary, setSalary] = useState<number>(32000); // Default: 32000
   const [rows, setRows] = useState<RowData[]>([]);
 
   // Default time configuration state
   const [defaultInTime, setDefaultInTime] = useState<string>('10:30');
-  const [defaultOutTime, setDefaultOutTime] = useState<string>('20:30');
+  const [defaultOutTime, setDefaultOutTime] = useState<string>('22:30');
 
   // Duty hours configuration state
-  const [monFriDutyHours, setMonFriDutyHours] = useState<number>(10); // Default: 10h
+  const [monFriDutyHours, setMonFriDutyHours] = useState<number>(12); // Default: 12h
   const [satDutyHours, setSatDutyHours] = useState<number>(5);     // Default: 5h
+  const [nonWorkingDutyHours, setNonWorkingDutyHours] = useState<number>(0); // Default: 0h
+  const [holidayDutyHours, setHolidayDutyHours] = useState<number>(0);       // Default: 0h
+
+  // Overtime rates state
+  const [otRateWorkingDay, setOtRateWorkingDay] = useState<number>(100);
+  const [otRateSaturday, setOtRateSaturday] = useState<number>(100);
+  const [otRateNonWorkingDay, setOtRateNonWorkingDay] = useState<number>(200);
+  const [otRateHoliday, setOtRateHoliday] = useState<number>(0);
 
   // Time format state: '12h' or '24h'
   const [timeFormat, setTimeFormat] = useState<'12h' | '24h'>('24h');
@@ -218,12 +245,14 @@ export default function App() {
   // Save Progress status notification
   const [saveStatus, setSaveStatus] = useState<string>('');
 
+  // Drag-and-drop state
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+
+  // Hidden file input ref for import
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
   // Function to calculate overtime based on row data
   const calculateRowOT = (inTime: string, outTime: string, dayType: DayType) => {
-    if (dayType === 'Non-working Day') {
-      return { decimal: '', hhmm: '' };
-    }
-
     if (!inTime || !outTime) {
       return { decimal: '0.00', hhmm: '00:00' };
     }
@@ -245,8 +274,10 @@ export default function App() {
       dutyHours = monFriDutyHours;
     } else if (dayType === 'Saturday') {
       dutyHours = satDutyHours;
+    } else if (dayType === 'Non-working Day') {
+      dutyHours = nonWorkingDutyHours;
     } else if (dayType === 'Holiday') {
-      dutyHours = 0;
+      dutyHours = holidayDutyHours;
     }
 
     const otDecimal = Math.max(0, workHours - dutyHours);
@@ -261,10 +292,24 @@ export default function App() {
     };
   };
 
-  // Load state from localStorage on month/year changes
+  // Load state from localStorage on month/year/profile changes
   useEffect(() => {
-    const key = `ot_calc_data_${selectedYear}_${selectedMonth}`;
-    const saved = localStorage.getItem(key);
+    localStorage.setItem(`ot_calc_last_month_${activeProfile}`, String(selectedMonth));
+    localStorage.setItem(`ot_calc_last_year_${activeProfile}`, String(selectedYear));
+    localStorage.setItem('ot_calc_active_profile', activeProfile);
+    localStorage.setItem('ot_calc_profiles', JSON.stringify(profiles));
+    
+    const key = `ot_calc_data_${activeProfile}_${selectedYear}_${selectedMonth}`;
+    let saved = localStorage.getItem(key);
+    
+    // Migration: If no data in Default Profile, check the old non-profiled key
+    if (!saved && activeProfile === 'Default Profile') {
+      const oldKey = `ot_calc_data_${selectedYear}_${selectedMonth}`;
+      saved = localStorage.getItem(oldKey);
+      if (saved) {
+        localStorage.setItem(key, saved); // migrate it
+      }
+    }
     
     if (saved) {
       try {
@@ -276,6 +321,12 @@ export default function App() {
           if (parsed.defaultOutTime) setDefaultOutTime(parsed.defaultOutTime);
           if (typeof parsed.monFriDutyHours === 'number') setMonFriDutyHours(parsed.monFriDutyHours);
           if (typeof parsed.satDutyHours === 'number') setSatDutyHours(parsed.satDutyHours);
+          if (typeof parsed.nonWorkingDutyHours === 'number') setNonWorkingDutyHours(parsed.nonWorkingDutyHours);
+          if (typeof parsed.holidayDutyHours === 'number') setHolidayDutyHours(parsed.holidayDutyHours);
+          if (typeof parsed.otRateWorkingDay === 'number') setOtRateWorkingDay(parsed.otRateWorkingDay);
+          if (typeof parsed.otRateSaturday === 'number') setOtRateSaturday(parsed.otRateSaturday);
+          if (typeof parsed.otRateNonWorkingDay === 'number') setOtRateNonWorkingDay(parsed.otRateNonWorkingDay);
+          if (typeof parsed.otRateHoliday === 'number') setOtRateHoliday(parsed.otRateHoliday);
           if (parsed.timeFormat) setTimeFormat(parsed.timeFormat);
           return;
         }
@@ -337,14 +388,18 @@ export default function App() {
     }
 
     setRows(newRows);
-  }, [selectedMonth, selectedYear]);
+  }, [selectedMonth, selectedYear, activeProfile, profiles]);
 
   // Recalculate row overtime when custom duty hours change
-  const handleDutyHoursChange = (type: 'mon-fri' | 'sat', val: number) => {
+  const handleDutyHoursChange = (type: 'mon-fri' | 'sat' | 'non-working' | 'holiday', val: number) => {
     if (type === 'mon-fri') {
       setMonFriDutyHours(val);
-    } else {
+    } else if (type === 'sat') {
       setSatDutyHours(val);
+    } else if (type === 'non-working') {
+      setNonWorkingDutyHours(val);
+    } else if (type === 'holiday') {
+      setHolidayDutyHours(val);
     }
 
     const updated = rows.map(row => {
@@ -353,10 +408,18 @@ export default function App() {
         dutyHours = type === 'mon-fri' ? val : monFriDutyHours;
       } else if (row.dayType === 'Saturday') {
         dutyHours = type === 'sat' ? val : satDutyHours;
+      } else if (row.dayType === 'Non-working Day') {
+        dutyHours = type === 'non-working' ? val : nonWorkingDutyHours;
+      } else if (row.dayType === 'Holiday') {
+        dutyHours = type === 'holiday' ? val : holidayDutyHours;
       }
 
-      if (row.dayType === 'Non-working Day') {
-        return row;
+      if (!row.inTime || !row.outTime) {
+        return {
+          ...row,
+          otHours: '0.00',
+          otHoursHHMM: '00:00',
+        };
       }
 
       const [inH, inM] = row.inTime.split(':').map(Number);
@@ -382,7 +445,7 @@ export default function App() {
 
   // Save progress manually
   const saveCurrentWork = () => {
-    const key = `ot_calc_data_${selectedYear}_${selectedMonth}`;
+    const key = `ot_calc_data_${activeProfile}_${selectedYear}_${selectedMonth}`;
     const payload = {
       rows,
       salary,
@@ -390,6 +453,12 @@ export default function App() {
       defaultOutTime,
       monFriDutyHours,
       satDutyHours,
+      nonWorkingDutyHours,
+      holidayDutyHours,
+      otRateWorkingDay,
+      otRateSaturday,
+      otRateNonWorkingDay,
+      otRateHoliday,
       timeFormat,
     };
     localStorage.setItem(key, JSON.stringify(payload));
@@ -399,9 +468,124 @@ export default function App() {
 
   // Clear saved storage
   const clearSavedData = () => {
-    const key = `ot_calc_data_${selectedYear}_${selectedMonth}`;
+    const key = `ot_calc_data_${activeProfile}_${selectedYear}_${selectedMonth}`;
     localStorage.removeItem(key);
+    // Also trigger reload of state by faking a profile change or just window reload
     window.location.reload();
+  };
+
+  // --- Export & Import Backup Logic ---
+  const exportProfileData = () => {
+    const key = `ot_calc_data_${activeProfile}_${selectedYear}_${selectedMonth}`;
+    const saved = localStorage.getItem(key);
+    if (!saved) {
+      alert("No saved data found to export for this month/profile. Please Save Progress first.");
+      return;
+    }
+    const blob = new Blob([saved], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Overtime_Backup_${activeProfile.replace(/\s+/g, '_')}_${selectedYear}_${selectedMonth}.json`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 2000);
+  };
+
+  const processImportedFile = (file: File) => {
+    if (!file.name.endsWith('.json')) {
+      alert('Please select a valid .json backup file.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string;
+        const parsed = JSON.parse(content);
+        if (Array.isArray(parsed.rows)) {
+          const key = `ot_calc_data_${activeProfile}_${selectedYear}_${selectedMonth}`;
+          localStorage.setItem(key, content);
+          setSaveStatus('Backup imported successfully! 📥');
+          setTimeout(() => {
+            setSaveStatus('');
+            window.location.reload();
+          }, 1500);
+        } else {
+          alert('Invalid backup file format.');
+        }
+      } catch (err) {
+        alert('Failed to parse backup file.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      processImportedFile(e.target.files[0]);
+    }
+    // reset input
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      processImportedFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  // Create new profile
+  const createNewProfile = () => {
+    const name = prompt('Enter name for the new profile (e.g. Employee B):');
+    if (name && name.trim()) {
+      const trimmed = name.trim();
+      if (!profiles.includes(trimmed)) {
+        const newProfiles = [...profiles, trimmed];
+        setProfiles(newProfiles);
+        setActiveProfile(trimmed);
+      } else {
+        alert('Profile already exists!');
+        setActiveProfile(trimmed);
+      }
+    }
+  };
+
+  // Delete current profile
+  const deleteProfile = () => {
+    if (activeProfile === 'Default Profile') {
+      alert('Cannot delete the Default Profile.');
+      return;
+    }
+    const confirmDelete = confirm(`Are you sure you want to delete profile "${activeProfile}"? All its data will be lost.`);
+    if (confirmDelete) {
+      const newProfiles = profiles.filter(p => p !== activeProfile);
+      setProfiles(newProfiles);
+      setActiveProfile('Default Profile');
+      
+      // Cleanup localStorage keys (optional, but good practice. For simplicity, just remove active keys)
+      // Since we key by month/year, finding all keys is complex without iterating localStorage.
+      // But we remove the current one.
+      const key = `ot_calc_data_${activeProfile}_${selectedYear}_${selectedMonth}`;
+      localStorage.removeItem(key);
+    }
   };
 
   // Handle value changes and trigger recalculation
@@ -440,238 +624,97 @@ export default function App() {
 
   // Calculations for Summary
   const totalOTHours = rows.reduce((sum, row) => sum + (row.otHours ? Number(row.otHours) : 0), 0);
-  const totalOTPayment = Math.round(totalOTHours * 150); // ₹150 rate rounded to whole number
+  const totalOTPayment = Math.round(rows.reduce((sum, row) => {
+    const hours = row.otHours ? Number(row.otHours) : 0;
+    let rate = 150;
+    if (row.dayType === 'Working Day') rate = otRateWorkingDay;
+    else if (row.dayType === 'Saturday') rate = otRateSaturday;
+    else if (row.dayType === 'Non-working Day') rate = otRateNonWorkingDay;
+    else if (row.dayType === 'Holiday') rate = otRateHoliday;
+    return sum + (hours * rate);
+  }, 0));
   const paidAmount = salary;
   const balanceAmount = totalOTPayment;
 
-  // EXCEL EXPORT WITH DYNAMIC 100% SOLID FOOTER ROW STYLING (YELLOW & GREEN)
+  // EXCEL EXPORT VIA NATIVE SERVER HTTP DOWNLOAD
   const exportToExcel = () => {
-    const ws: any = { '!ref': `A1:H${rows.length + 10}` };
-    
-    // Header styling
-    const headerStyle = {
-      fill: { fgColor: { rgb: '2E7D32' } }, // Deep emerald green
-      font: { name: 'Segoe UI', size: 10, bold: true, color: { rgb: 'FFFFFF' } }, // White text
-      alignment: { horizontal: 'center', vertical: 'center' },
-      border: {
-        top: { style: 'thin', color: { rgb: '1B5E20' } },
-        bottom: { style: 'medium', color: { rgb: '1B5E20' } },
-        left: { style: 'thin', color: { rgb: '1B5E20' } },
-        right: { style: 'thin', color: { rgb: '1B5E20' } },
-      }
-    };
+    try {
+      const monthLabel = MONTHS.find(m => m.value === selectedMonth)?.label || 'Month';
+      const payload = {
+        rows,
+        salary,
+        monthLabel,
+        selectedMonth,
+        selectedYear,
+        totalOTHours,
+        totalOTPayment,
+        paidAmount,
+        balanceAmount,
+        otRateWorkingDay,
+        otRateSaturday,
+        otRateNonWorkingDay,
+        otRateHoliday,
+      };
 
-    const normalStyle = {
-      font: { name: 'Segoe UI', size: 10 },
-      alignment: { horizontal: 'center', vertical: 'center' },
-      border: {
-        top: { style: 'thin', color: { rgb: 'E0E0E0' } },
-        bottom: { style: 'thin', color: { rgb: 'E0E0E0' } },
-        left: { style: 'thin', color: { rgb: 'E0E0E0' } },
-        right: { style: 'thin', color: { rgb: 'E0E0E0' } },
-      }
-    };
+      const encoded = encodeURIComponent(JSON.stringify(payload));
+      window.location.href = `/api/export-excel?payload=${encoded}`;
+    } catch (err) {
+      console.error("Excel export error:", err);
+      alert("Failed to export Excel file: " + err);
+    }
+  };
 
-    const dateStyle = {
-      font: { name: 'Segoe UI', size: 10 },
-      alignment: { horizontal: 'left', vertical: 'center' },
-      border: {
-        top: { style: 'thin', color: { rgb: 'E0E0E0' } },
-        bottom: { style: 'thin', color: { rgb: 'E0E0E0' } },
-        left: { style: 'thin', color: { rgb: 'E0E0E0' } },
-        right: { style: 'thin', color: { rgb: 'E0E0E0' } },
-      }
-    };
+  // CSV EXPORT (100% guaranteed browser-compatible alternative)
+  const exportToCSV = () => {
+    try {
+      const monthLabel = MONTHS.find(m => m.value === selectedMonth)?.label || 'Month';
+      const shortMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const monthYearLabel = `${shortMonths[selectedMonth - 1]}-${selectedYear}`;
+      const daysInMonthForExport = new Date(selectedYear, selectedMonth, 0).getDate();
+      const dailyBasicAmount = Math.round(salary / daysInMonthForExport);
 
-    const amountStyle = {
-      font: { name: 'Segoe UI', size: 10 },
-      alignment: { horizontal: 'right', vertical: 'center' },
-      numFmt: '₹#,##0',
-      border: {
-        top: { style: 'thin', color: { rgb: 'E0E0E0' } },
-        bottom: { style: 'thin', color: { rgb: 'E0E0E0' } },
-        left: { style: 'thin', color: { rgb: 'E0E0E0' } },
-        right: { style: 'thin', color: { rgb: 'E0E0E0' } },
-      }
-    };
+      const data: any[][] = [];
+      data.push([monthYearLabel]);
+      data.push(['Date', '', 'Ex Hours', 'OT Rate X Hours', '', 'In Time', 'Out Time', 'Amount']);
 
-    // Solid Yellow Footer Strip Styles (A34-H34, A36-H36, A37-H37)
-    const yellowRowLeftStyle = {
-      fill: { fgColor: { rgb: 'FFF2CC' } }, // Solid light yellow background
-      font: { name: 'Segoe UI', size: 10, bold: true, color: { rgb: '7F6000' } },
-      alignment: { horizontal: 'left', vertical: 'center' },
-      border: {
-        top: { style: 'thin', color: { rgb: 'F0D980' } },
-        bottom: { style: 'thin', color: { rgb: 'F0D980' } },
-        left: { style: 'thin', color: { rgb: 'F0D980' } },
-        right: { style: 'thin', color: { rgb: 'F0D980' } },
-      }
-    };
+      rows.forEach((row) => {
+        data.push([
+          row.dateStr,
+          '',
+          row.otHoursHHMM || '',
+          '',
+          '',
+          row.inTime ? `${row.inTime}:00` : '',
+          row.outTime ? `${row.outTime}:00` : '',
+          dailyBasicAmount
+        ]);
+      });
 
-    const yellowRowRightStyle = {
-      fill: { fgColor: { rgb: 'FFF2CC' } },
-      font: { name: 'Segoe UI', size: 10, bold: true, color: { rgb: '7F6000' } },
-      alignment: { horizontal: 'right', vertical: 'center' },
-      numFmt: '₹#,##0',
-      border: {
-        top: { style: 'thin', color: { rgb: 'F0D980' } },
-        bottom: { style: 'thin', color: { rgb: 'F0D980' } },
-        left: { style: 'thin', color: { rgb: 'F0D980' } },
-        right: { style: 'thin', color: { rgb: 'F0D980' } },
-      }
-    };
+      data.push([]);
+      data.push(['', '', '', '', '', '', 'Basic payment', salary]);
+      data.push(['', 'Total Hours =', `${totalOTHours.toFixed(2)} hrs`, '', '', '', 'O. T.  Rs.', totalOTPayment]);
+      data.push(['', '', '', '', '', '', 'Paid amount', paidAmount]);
+      data.push([]);
+      data.push(['', '', '', '', '', 'Balance Amount', '', balanceAmount]);
 
-    const yellowRowCenterStyle = {
-      fill: { fgColor: { rgb: 'FFF2CC' } },
-      font: { name: 'Segoe UI', size: 10, bold: true, color: { rgb: '7F6000' } },
-      alignment: { horizontal: 'center', vertical: 'center' },
-      border: {
-        top: { style: 'thin', color: { rgb: 'F0D980' } },
-        bottom: { style: 'thin', color: { rgb: 'F0D980' } },
-        left: { style: 'thin', color: { rgb: 'F0D980' } },
-        right: { style: 'thin', color: { rgb: 'F0D980' } },
-      }
-    };
-
-    // Solid Green Footer Strip Styles (A35-H35, A38-H38)
-    const greenRowLeftStyle = {
-      fill: { fgColor: { rgb: 'E2EFDA' } }, // Solid light green background
-      font: { name: 'Segoe UI', size: 10, bold: true, color: { rgb: '375623' } },
-      alignment: { horizontal: 'left', vertical: 'center' },
-      border: {
-        top: { style: 'thin', color: { rgb: 'A9D18E' } },
-        bottom: { style: 'thin', color: { rgb: 'A9D18E' } },
-        left: { style: 'thin', color: { rgb: 'A9D18E' } },
-        right: { style: 'thin', color: { rgb: 'A9D18E' } },
-      }
-    };
-
-    const greenRowRightStyle = {
-      fill: { fgColor: { rgb: 'E2EFDA' } },
-      font: { name: 'Segoe UI', size: 10, bold: true, color: { rgb: '375623' } },
-      alignment: { horizontal: 'right', vertical: 'center' },
-      numFmt: '₹#,##0',
-      border: {
-        top: { style: 'thin', color: { rgb: 'A9D18E' } },
-        bottom: { style: 'thin', color: { rgb: 'A9D18E' } },
-        left: { style: 'thin', color: { rgb: 'A9D18E' } },
-        right: { style: 'thin', color: { rgb: 'A9D18E' } },
-      }
-    };
-
-    const greenRowCenterStyle = {
-      fill: { fgColor: { rgb: 'E2EFDA' } },
-      font: { name: 'Segoe UI', size: 10, bold: true, color: { rgb: '375623' } },
-      alignment: { horizontal: 'center', vertical: 'center' },
-      border: {
-        top: { style: 'thin', color: { rgb: 'A9D18E' } },
-        bottom: { style: 'thin', color: { rgb: 'A9D18E' } },
-        left: { style: 'thin', color: { rgb: 'A9D18E' } },
-        right: { style: 'thin', color: { rgb: 'A9D18E' } },
-      }
-    };
-
-    // Helper to set cell
-    const setCell = (col: string, rowNum: number, value: any, type: string = 's', style: any = null) => {
-      const cellRef = `${col}${rowNum}`;
-      ws[cellRef] = { v: value, t: type };
-      if (style) {
-        ws[cellRef].s = style;
-      }
-    };
-
-    // Row 1: Month Name and Year in cell A1 (formatted as exactly e.g. "Apr-2026")
-    const monthLabel = MONTHS.find(m => m.value === selectedMonth)?.label || 'Month';
-    const shortMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const monthYearLabel = `${shortMonths[selectedMonth - 1]}-${selectedYear}`;
-    setCell('A', 1, monthYearLabel, 's', {
-      font: { name: 'Segoe UI', size: 12, bold: true, color: { rgb: '1B5E20' } }
-    });
-
-    // Row 2: Header Column titles
-    setCell('A', 2, 'Date', 's', headerStyle);
-    setCell('B', 2, '', 's', headerStyle);
-    setCell('C', 2, 'Ex Hours', 's', headerStyle);
-    setCell('D', 2, '150Rs. X Hours ', 's', headerStyle);
-    setCell('E', 2, '', 's', headerStyle);
-    setCell('F', 2, 'In Time', 's', headerStyle);
-    setCell('G', 2, 'Out Time', 's', headerStyle);
-    setCell('H', 2, 'Amount', 's', headerStyle);
-
-    // Rows 3 to N+2: Daily Rows
-    rows.forEach((row, i) => {
-      const rNum = i + 3;
-      const dateObj = new Date(row.dateStr);
-
-      setCell('A', rNum, dateObj, 'd', { ...dateStyle, numFmt: 'yyyy-mm-dd' });
-      setCell('B', rNum, '', 's', normalStyle);
-
-      if (row.dayType === 'Non-working Day') {
-        setCell('C', rNum, '', 's', normalStyle);
-      } else {
-        setCell('C', rNum, row.otHoursHHMM, 's', normalStyle);
-      }
-
-      setCell('D', rNum, '', 's', normalStyle);
-      setCell('E', rNum, '', 's', normalStyle);
-
-      if (row.dayType === 'Non-working Day') {
-        setCell('F', rNum, '', 's', normalStyle);
-        setCell('G', rNum, '', 's', normalStyle);
-      } else {
-        setCell('F', rNum, row.inTime ? `${row.inTime}:00` : '', 's', normalStyle);
-        setCell('G', rNum, row.outTime ? `${row.outTime}:00` : '', 's', normalStyle);
-      }
-
-      setCell('H', rNum, 900, 'n', amountStyle);
-    });
-
-    const n = rows.length;
-
-    // Row N + 4 (A34 to H34): Solid Yellow Row Strip ("Basic payment")
-    const rBasic = n + 4;
-    ['A', 'B', 'C', 'D', 'E', 'F'].forEach(col => setCell(col, rBasic, '', 's', yellowRowCenterStyle));
-    setCell('G', rBasic, 'Basic payment', 's', yellowRowLeftStyle);
-    setCell('H', rBasic, salary, 'n', yellowRowRightStyle);
-
-    // Row N + 5 (A35 to H35): Solid Green Row Strip ("Total Hours =")
-    const rOT = n + 5;
-    ['A', 'D', 'E', 'F'].forEach(col => setCell(col, rOT, '', 's', greenRowCenterStyle));
-    setCell('B', rOT, 'Total Hours =', 's', greenRowLeftStyle);
-    setCell('C', rOT, `${totalOTHours.toFixed(2)}x150`, 's', greenRowLeftStyle);
-    setCell('G', rOT, 'O. T.  Rs.', 's', greenRowLeftStyle);
-    setCell('H', rOT, totalOTPayment, 'n', greenRowRightStyle);
-
-    // Row N + 6 (A36 to H36): Solid Yellow Row Strip ("Paid amount")
-    const rPaid = n + 6;
-    ['A', 'B', 'C', 'D', 'E', 'F'].forEach(col => setCell(col, rPaid, '', 's', yellowRowCenterStyle));
-    setCell('G', rPaid, 'Paid amount', 's', yellowRowLeftStyle);
-    setCell('H', rPaid, paidAmount, 'n', yellowRowRightStyle);
-
-    // Row N + 7 (A37 to H37): Solid Yellow Row Strip (Empty Separator Strip)
-    const rEmptySep = n + 7;
-    ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].forEach(col => setCell(col, rEmptySep, '', 's', yellowRowCenterStyle));
-
-    // Row N + 8 (A38 to H38): Solid Green Row Strip ("Balance Amount")
-    const rBalance = n + 8;
-    ['A', 'B', 'C', 'D', 'E', 'G'].forEach(col => setCell(col, rBalance, '', 's', greenRowCenterStyle));
-    setCell('F', rBalance, 'Balance Amount', 's', greenRowLeftStyle);
-    setCell('H', rBalance, balanceAmount, 'n', greenRowRightStyle);
-
-    ws['!cols'] = [
-      { wch: 14 }, // A (Date)
-      { wch: 14 }, // B (Total Hours label)
-      { wch: 14 }, // C (OT Hours / formula)
-      { wch: 16 }, // D (150Rs. X Hours header)
-      { wch: 5 },  // E (empty)
-      { wch: 16 }, // F (In Time / Balance label)
-      { wch: 16 }, // G (Out Time / Basic/OT/Paid labels)
-      { wch: 16 }  // H (Amount)
-    ];
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
-    XLSX.writeFile(wb, `Overtime_Report_${monthLabel}_${selectedYear}.xlsx`);
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      const csvOutput = XLSX.utils.sheet_to_csv(ws);
+      
+      const blob = new Blob(['\uFEFF' + csvOutput], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const fileName = `Overtime_Report_${monthLabel}_${selectedYear}.csv`;
+      
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = fileName;
+      a.setAttribute('download', fileName);
+      document.body.appendChild(a);
+      a.click();
+    } catch (err) {
+      console.error("CSV export error:", err);
+      alert("Failed to export CSV file: " + err);
+    }
   };
 
   return (
@@ -729,6 +772,35 @@ export default function App() {
               </div>
             </div>
 
+            {/* Profile Management Controls */}
+            <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-2 py-1.5 w-full xl:w-auto">
+              <select
+                value={activeProfile}
+                onChange={(e) => setActiveProfile(e.target.value)}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-slate-200 text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-all cursor-pointer w-full sm:w-32 truncate"
+              >
+                {profiles.map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              <button
+                onClick={createNewProfile}
+                title="Create New Profile"
+                className="bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold p-1.5 rounded-lg transition-all"
+              >
+                ➕
+              </button>
+              {activeProfile !== 'Default Profile' && (
+                <button
+                  onClick={deleteProfile}
+                  title="Delete Current Profile"
+                  className="bg-slate-800 hover:bg-slate-700 text-rose-400 font-bold p-1.5 rounded-lg transition-all"
+                >
+                  🗑️
+                </button>
+              )}
+            </div>
+
             {/* Save Current Work Action */}
             <button
               onClick={saveCurrentWork}
@@ -742,15 +814,23 @@ export default function App() {
               onClick={clearSavedData}
               className="bg-slate-900 border border-slate-800 hover:bg-slate-850 hover:border-slate-700 active:scale-[0.97] text-slate-300 font-bold py-2.5 px-4 rounded-xl transition-all text-xs flex items-center justify-center gap-2 cursor-pointer w-full sm:w-auto"
             >
-              🔄 Reset Default
+              🔄 Reset Data
             </button>
 
             {/* Download Excel Report */}
             <button
               onClick={exportToExcel}
-              className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 active:scale-[0.97] text-slate-950 font-bold py-2.5 px-5 rounded-xl shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/30 transition-all text-xs flex items-center justify-center gap-2 cursor-pointer w-full sm:w-auto"
+              className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 active:scale-[0.97] text-slate-950 font-bold py-2.5 px-4 rounded-xl shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/30 transition-all text-xs flex items-center justify-center gap-2 cursor-pointer w-full sm:w-auto"
             >
-              📥 Excel Report
+              📥 Excel (.xlsx)
+            </button>
+
+            {/* Download CSV Report */}
+            <button
+              onClick={exportToCSV}
+              className="bg-slate-900 border border-emerald-500/40 hover:bg-slate-800 text-emerald-400 font-bold py-2.5 px-4 rounded-xl transition-all text-xs flex items-center justify-center gap-2 cursor-pointer w-full sm:w-auto"
+            >
+              📄 CSV (.csv)
             </button>
           </div>
         </header>
@@ -814,7 +894,7 @@ export default function App() {
                   type="number"
                   value={salary}
                   onChange={(e) => setSalary(Number(e.target.value))}
-                  placeholder="27000"
+                  placeholder="32000"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-sm"
                 />
               </div>
@@ -877,6 +957,36 @@ export default function App() {
                   className="bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-xs"
                 />
               </div>
+
+              {/* Non-working Day Duty Hours Selection */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                  Non-working Day Duty (h)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="24"
+                  value={nonWorkingDutyHours}
+                  onChange={(e) => handleDutyHoursChange('non-working', Number(e.target.value))}
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-xs"
+                />
+              </div>
+
+              {/* Holiday Duty Hours Selection */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                  Holiday Duty (h)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="24"
+                  value={holidayDutyHours}
+                  onChange={(e) => handleDutyHoursChange('holiday', Number(e.target.value))}
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-xs"
+                />
+              </div>
             </div>
 
             {/* Auto-fill Button */}
@@ -888,6 +998,29 @@ export default function App() {
             </button>
           </section>
         </div>
+
+        {/* Overtime Rates Panel */}
+        <section className="bg-slate-900/60 border border-slate-800/80 p-5 md:p-6 rounded-2xl backdrop-blur-xl">
+          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Overtime Hourly Rates (₹)</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Working Day</label>
+              <input type="number" value={otRateWorkingDay} onChange={(e) => setOtRateWorkingDay(Number(e.target.value))} className="bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-xs" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Saturday</label>
+              <input type="number" value={otRateSaturday} onChange={(e) => setOtRateSaturday(Number(e.target.value))} className="bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-xs" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Non-working Day</label>
+              <input type="number" value={otRateNonWorkingDay} onChange={(e) => setOtRateNonWorkingDay(Number(e.target.value))} className="bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-xs" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Holiday</label>
+              <input type="number" value={otRateHoliday} onChange={(e) => setOtRateHoliday(Number(e.target.value))} className="bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 transition-all text-xs" />
+            </div>
+          </div>
+        </section>
 
         {/* Dynamic Table Section (Desktop View) */}
         <section className="hidden md:block bg-slate-900/60 border border-slate-800/80 rounded-2xl overflow-hidden backdrop-blur-xl">
@@ -977,18 +1110,14 @@ export default function App() {
 
                       {/* OT Hours (HH:MM and decimal) */}
                       <td className="py-3 px-6 text-right">
-                        {row.dayType === 'Non-working Day' ? (
-                          <span className="text-slate-600 text-xs italic font-medium px-4">—</span>
-                        ) : (
-                          <div className="flex flex-col items-end">
-                            <span className="font-semibold text-emerald-400 text-sm">
-                              {row.otHoursHHMM}
-                            </span>
-                            <span className="text-slate-400 text-xs mt-0.5">
-                              ({row.otHours} hrs)
-                            </span>
-                          </div>
-                        )}
+                        <div className="flex flex-col items-end">
+                          <span className="font-semibold text-emerald-400 text-sm">
+                            {row.otHoursHHMM}
+                          </span>
+                          <span className="text-slate-400 text-xs mt-0.5">
+                            ({row.otHours} hrs)
+                          </span>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1067,18 +1196,14 @@ export default function App() {
                 {/* Calculated Overtime output */}
                 <div className="mt-3 pt-3 border-t border-slate-800/50 flex justify-between items-center">
                   <span className="text-[10px] text-slate-400 font-semibold tracking-wider uppercase">Overtime</span>
-                  {row.dayType === 'Non-working Day' ? (
-                    <span className="text-slate-500 text-xs italic font-medium">Non-working Day</span>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-emerald-400 text-sm">
-                        {row.otHoursHHMM}
-                      </span>
-                      <span className="text-slate-400 text-xs">
-                        ({row.otHours} hrs)
-                      </span>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-emerald-400 text-sm">
+                      {row.otHoursHHMM}
+                    </span>
+                    <span className="text-slate-400 text-xs">
+                      ({row.otHours} hrs)
+                    </span>
+                  </div>
                 </div>
               </div>
             );
@@ -1104,7 +1229,7 @@ export default function App() {
           <div className="bg-slate-900/60 border border-slate-800/80 p-5 rounded-2xl backdrop-blur-xl hover:border-slate-700/60 transition-all">
             <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total OT Hours</h3>
             <p className="text-2xl font-black text-teal-400 mt-2">{totalOTHours.toFixed(2)} hrs</p>
-            <span className="text-slate-500 text-xs mt-1 block">({totalOTHours.toFixed(2)} × ₹150)</span>
+            <span className="text-slate-500 text-xs mt-1 block">Accrued across all days</span>
           </div>
 
           {/* Total OT Payment (OT Rs.) */}

@@ -1,0 +1,26 @@
+{
+  "totalXp": 100,
+  "currentRank": 1,
+  "rankName": "Bug Rookie",
+  "currentStreak": 0,
+  "longestStreak": 0,
+  "lastActiveDate": "2026-08-26",
+  "activeMultiplier": 1,
+  "badges": [],
+  "xpHistory": [
+    {
+      "type": "Tier 1 Fix",
+      "baseXp": 50,
+      "multiplier": 1,
+      "finalXp": 50,
+      "timestamp": "2026-08-26T18:19:19.445Z"
+    },
+    {
+      "type": "Tier 1 Fix",
+      "baseXp": 50,
+      "multiplier": 1,
+      "finalXp": 50,
+      "timestamp": "2026-08-26T18:19:55.291Z"
+    }
+  ]
+}
